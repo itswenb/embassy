@@ -86,8 +86,32 @@ pub struct SpiSlaveRingBuffered<'d, T: Instance, W: Word> {
 }
 
 impl<'d, T: Instance> SpiSlave<'d, T> {
-    /// Create a new SPI slave driver.
-    pub fn new<Cs>(
+    /// Create a new SPI slave driver
+    pub fn new(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
+        miso: impl Peripheral<P = impl MisoPin<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(peri, sck, mosi, miso);
+
+        sck.set_as_af(sck.af_num(), AfType::input(Pull::None));
+        mosi.set_as_af(mosi.af_num(), AfType::input(Pull::None));
+        miso.set_as_af(miso.af_num(), AfType::output(OutputType::PushPull, Speed::VeryHigh));
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            Some(miso.map_into()),
+            None,
+            config,
+        )
+    }
+
+    /// Create a new SPI slave driver with hardware managed chip select
+    pub fn new_hardware_cs<Cs>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
         mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
@@ -114,6 +138,7 @@ impl<'d, T: Instance> SpiSlave<'d, T> {
             config,
         )
     }
+
 
     fn new_inner(
         peri: impl Peripheral<P = T> + 'd,
@@ -142,7 +167,7 @@ impl<'d, T: Instance> SpiSlave<'d, T> {
                 w.set_cpol(cpol);
 
                 w.set_mstr(vals::Mstr::SLAVE);
-                w.set_ssm(false);
+                w.set_ssm(cs.is_none());
 
                 w.set_lsbfirst(lsbfirst);
                 w.set_crcen(false);
@@ -165,7 +190,7 @@ impl<'d, T: Instance> SpiSlave<'d, T> {
                 w.set_cpol(cpol);
 
                 w.set_mstr(vals::Mstr::SLAVE);
-                w.set_ssm(false);
+                w.set_ssm(cs.is_none());
 
                 w.set_lsbfirst(lsbfirst);
                 w.set_crcen(false);
@@ -181,7 +206,7 @@ impl<'d, T: Instance> SpiSlave<'d, T> {
                 w.set_lsbfirst(lsbfirst);
 
                 w.set_master(vals::Master::SLAVE);
-                w.set_ssm(false);
+                w.set_ssm(cs.is_none());
 
                 w.set_comm(vals::Comm::FULLDUPLEX);
                 w.set_ssom(vals::Ssom::ASSERTED);

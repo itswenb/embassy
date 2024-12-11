@@ -18,7 +18,7 @@ use crate::time::Hertz;
 use crate::Peripheral;
 
 mod slave;
-pub use slave::{Config as ConfigSlave, SpiSlave};
+pub use slave::{Config as ConfigSlave, SpiSlave, SpiSlaveRingBuffered};
 
 /// SPI error.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
