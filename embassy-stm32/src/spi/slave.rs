@@ -9,7 +9,7 @@ use embedded_hal_nb::nb;
 
 use super::{finish_dma, set_rxdmaen, set_txdmaen, flush_rx_fifo, RxDma, TxDma};
 use super::{
-    rx_ready, tx_ready, word_impl, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
+    spin_until_rx_ready, spin_until_tx_ready, word_impl, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
     SealedWord, Word,
 };
 use crate::dma::ChannelAndRequest;
@@ -135,6 +135,9 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
                 w.set_lsbfirst(lsbfirst);
                 w.set_crcen(false);
                 w.set_bidimode(vals::Bidimode::UNIDIRECTIONAL);
+                if miso.is_none() {
+                    w.set_rxonly(vals::Rxonly::OUTPUTDISABLED);
+                }
             });
         }
         #[cfg(any(spi_v3, spi_v4, spi_v5))]
@@ -147,8 +150,12 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
 
                 w.set_master(vals::Master::SLAVE);
                 w.set_ssm(cs.is_none());
-
-                w.set_comm(vals::Comm::FULLDUPLEX);
+                
+                if miso.is_none() {
+                    w.set_comm(vals::Comm::RECEIVER);
+                } else {
+                    w.set_comm(vals::Comm::FULLDUPLEX);
+                }
                 w.set_ssom(vals::Ssom::ASSERTED);
                 w.set_midi(0);
                 w.set_mssi(0);
@@ -345,6 +352,31 @@ impl<'d> SpiSlave<'d, Async> {
             config,
         )
     }
+
+    pub fn new_rxonly<T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
+        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(peri, sck, mosi, rx_dma);
+
+        sck.set_as_af(sck.af_num(), AfType::input(Pull::None));
+        mosi.set_as_af(mosi.af_num(), AfType::input(Pull::None));
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            None,
+            None, 
+            None,
+            new_dma!(rx_dma),
+            config
+        )
+    }
+
     pub fn new_hardware_cs<Cs, T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -377,6 +409,35 @@ impl<'d> SpiSlave<'d, Async> {
         )
     }
 
+    pub fn new_rxonly_hardware_cs<Cs, T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
+        cs: impl Peripheral<P = Cs> + 'd,
+        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        config: Config,
+    ) -> Self 
+    where
+        Cs: CsPin<T>
+    {
+        into_ref!(peri, sck, mosi, cs);
+
+        sck.set_as_af(sck.af_num(), AfType::input(Pull::None));
+        mosi.set_as_af(mosi.af_num(), AfType::input(Pull::None));
+        cs.set_as_af(cs.af_num(), AfType::input(Pull::None));
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            None,
+            Some(cs.map_into()),
+            None,
+            new_dma!(rx_dma),
+            config
+        )
+    }
+
     /// SPI write, using DMA.
     pub async fn write<W: Word>(&mut self, data: &[W]) -> Result<(), Error> {
         if data.is_empty() {
@@ -401,6 +462,43 @@ impl<'d> SpiSlave<'d, Async> {
         });
 
         tx_f.await;
+
+        finish_dma(self.info.regs);
+
+        Ok(())
+    }
+
+    /// SPI read, using DMA.
+    // (NOTE: amoussa) FIXME I don't think this works for spi_v3 and above
+    pub async fn read<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        self.set_word_size(W::CONFIG);
+
+        self.info.regs.cr1().modify(|w| {
+            w.set_spe(false);
+        });
+
+        // SPIv3 clears rxfifo on SPE=0
+        #[cfg(not(any(spi_v3, spi_v4, spi_v5)))]
+        flush_rx_fifo(self.info.regs);
+
+        set_rxdmaen(self.info.regs, true);
+
+        let rx_src = self.info.regs.rx_ptr();
+        let rx_f = unsafe { self.rx_dma.as_mut().unwrap().read(rx_src, data, Default::default()) };
+
+        self.info.regs.cr1().modify(|w| {
+            w.set_spe(true);
+        });
+        #[cfg(any(spi_v3, spi_v4, spi_v5))]
+        self.info.regs.cr1().modify(|w| {
+            w.set_cstart(true);
+        });
+        
+        rx_f.await;
 
         finish_dma(self.info.regs);
 
@@ -480,11 +578,7 @@ impl<'d, M: PeriMode> SetConfig for SpiSlave<'d, M> {
 }
 
 fn transfer_word<W: Word>(regs: Regs, tx_word: W) -> nb::Result<W, Error> {
-    // To keep the tx and rx FIFO queues in the SPI peripheral synchronized, a word must be
-    // simultaneously sent and received, even when only sending or receiving.
-    if !tx_ready(regs, true)? || !rx_ready(regs)? {
-        return Err(nb::Error::WouldBlock);
-    }
+    spin_until_tx_ready(regs, true)?;
 
     unsafe {
         ptr::write_volatile(regs.tx_ptr(), tx_word);
@@ -492,6 +586,8 @@ fn transfer_word<W: Word>(regs: Regs, tx_word: W) -> nb::Result<W, Error> {
         #[cfg(any(spi_v3, spi_v4, spi_v5))]
         regs.cr1().modify(|reg| reg.set_cstart(true));
     }
+
+    spin_until_rx_ready(regs)?;
 
     let rx_word = unsafe { ptr::read_volatile(regs.rx_ptr()) };
     Ok(rx_word)
