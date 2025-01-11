@@ -6,16 +6,16 @@ use embassy_futures::join::join;
 use embassy_hal_internal::{into_ref, PeripheralRef};
 use embedded_hal_02::spi::{Mode, Phase, Polarity, MODE_0};
 
-use super::{finish_dma, set_rxdmaen, set_txdmaen, flush_rx_fifo, RxDma, TxDma};
+use super::{finish_dma, flush_rx_fifo, set_rxdmaen, set_txdmaen, RxDma, TxDma};
 use super::{
-    transfer_word, write_word, word_impl, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
+    transfer_word, word_impl, write_word, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
     SealedWord, Word,
 };
 use crate::dma::ChannelAndRequest;
 use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin as _, Speed};
+use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::pac::spi::{vals, Spi as Regs};
 use crate::{rcc, Peripheral};
-use crate::mode::{Async, Blocking, Mode as PeriMode};
 
 /// SPI slave configuration.
 #[non_exhaustive]
@@ -149,7 +149,7 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
 
                 w.set_master(vals::Master::SLAVE);
                 w.set_ssm(cs.is_none());
-                
+
                 if miso.is_none() {
                     w.set_comm(vals::Comm::RECEIVER);
                 } else {
@@ -173,7 +173,7 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
                 w.set_ssi(false);
             });
         }
-        
+
         Self {
             info,
             sck,
@@ -387,10 +387,10 @@ impl<'d> SpiSlave<'d, Blocking> {
             Some(sck.map_into()),
             Some(mosi.map_into()),
             None,
-            None, 
             None,
             None,
-            config
+            None,
+            config,
         )
     }
 
@@ -452,7 +452,7 @@ impl<'d> SpiSlave<'d, Async> {
             config,
         )
     }
-    
+
     // create a new SPI slave driver, in RX-only mode (only MOSI pin, no MISO).
     pub fn new_rxonly<T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
@@ -471,10 +471,10 @@ impl<'d> SpiSlave<'d, Async> {
             Some(sck.map_into()),
             Some(mosi.map_into()),
             None,
-            None, 
+            None,
             None,
             new_dma!(rx_dma),
-            config
+            config,
         )
     }
 
@@ -519,9 +519,9 @@ impl<'d> SpiSlave<'d, Async> {
         cs: impl Peripheral<P = Cs> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
         config: Config,
-    ) -> Self 
+    ) -> Self
     where
-        Cs: CsPin<T>
+        Cs: CsPin<T>,
     {
         into_ref!(peri, sck, mosi, cs);
 
@@ -537,7 +537,7 @@ impl<'d> SpiSlave<'d, Async> {
             Some(cs.map_into()),
             None,
             new_dma!(rx_dma),
-            config
+            config,
         )
     }
 
@@ -600,7 +600,7 @@ impl<'d> SpiSlave<'d, Async> {
         self.info.regs.cr1().modify(|w| {
             w.set_cstart(true);
         });
-        
+
         rx_f.await;
 
         finish_dma(self.info.regs);
