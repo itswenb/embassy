@@ -5,11 +5,10 @@ use embassy_embedded_hal::SetConfig;
 use embassy_futures::join::join;
 use embassy_hal_internal::{into_ref, PeripheralRef};
 use embedded_hal_02::spi::{Mode, Phase, Polarity, MODE_0};
-use embedded_hal_nb::nb;
 
 use super::{finish_dma, set_rxdmaen, set_txdmaen, flush_rx_fifo, RxDma, TxDma};
 use super::{
-    spin_until_rx_ready, spin_until_tx_ready, word_impl, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
+    transfer_word, write_word, word_impl, BitOrder, CsPin, Error, Info, Instance, MisoPin, MosiPin, RegsExt, SckPin,
     SealedWord, Word,
 };
 use crate::dma::ChannelAndRequest;
@@ -237,36 +236,84 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
         self.current_word_size = word_size;
     }
 
-    /// Write a word to the SPI.
-    pub fn write_blocking<W: Word>(&mut self, word: W) -> nb::Result<(), Error> {
+    /// Blocking write.
+    pub fn blocking_write<W: Word>(&mut self, words: &[W]) -> Result<(), Error> {
+        // needed in v3+ to avoid overrun causing the SPI RX state machine to get stuck...?
+        #[cfg(any(spi_v3, spi_v4, spi_v5))]
+        self.info.regs.cr1().modify(|w| w.set_spe(false));
         self.info.regs.cr1().modify(|w| w.set_spe(true));
+        flush_rx_fifo(self.info.regs);
         self.set_word_size(W::CONFIG);
+        for word in words.iter() {
+            transfer_word(self.info.regs, *word)?;
+        }
 
-        let _ = transfer_word(self.info.regs, word)?;
+        // wait until last word is transmitted. (except on v1, see above)
+        #[cfg(not(any(spi_v1, spi_f1, spi_v2)))]
+        while !self.info.regs.sr().read().txc() {}
+        #[cfg(spi_v2)]
+        while self.info.regs.sr().read().bsy() {}
 
         Ok(())
     }
 
-    /// Read a word from the SPI.
-    pub fn read_blocking<W: Word>(&mut self) -> nb::Result<W, Error> {
+    /// Blocking read.
+    pub fn blocking_read<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
+        // needed in v3+ to avoid overrun causing the SPI RX state machine to get stuck...?
+        #[cfg(any(spi_v3, spi_v4, spi_v5))]
+        self.info.regs.cr1().modify(|w| w.set_spe(false));
         self.info.regs.cr1().modify(|w| w.set_spe(true));
+        flush_rx_fifo(self.info.regs);
         self.set_word_size(W::CONFIG);
-
-        transfer_word(self.info.regs, W::default())
+        for word in words.iter_mut() {
+            *word = transfer_word(self.info.regs, W::default())?;
+        }
+        Ok(())
     }
 
-    /// Bidirectionally transfer by writing a word to SPI while simultaneously reading a word from
-    /// the SPI during the same clock cycle.
-    pub fn transfer_blocking<W: Word>(&mut self, word: W) -> nb::Result<W, Error> {
+    /// Blocking in-place bidirectional transfer.
+    ///
+    /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
+    pub fn blocking_transfer_in_place<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
+        // needed in v3+ to avoid overrun causing the SPI RX state machine to get stuck...?
+        #[cfg(any(spi_v3, spi_v4, spi_v5))]
+        self.info.regs.cr1().modify(|w| w.set_spe(false));
         self.info.regs.cr1().modify(|w| w.set_spe(true));
+        flush_rx_fifo(self.info.regs);
         self.set_word_size(W::CONFIG);
+        for word in words.iter_mut() {
+            *word = transfer_word(self.info.regs, *word)?;
+        }
+        Ok(())
+    }
 
-        transfer_word(self.info.regs, word)
+    /// Blocking bidirectional transfer.
+    ///
+    /// This transfers both buffers at the same time, so it is NOT equivalent to `write` followed by `read`.
+    ///
+    /// The transfer runs for `max(read.len(), write.len())` bytes. If `read` is shorter extra bytes are ignored.
+    /// If `write` is shorter it is padded with zero bytes.
+    pub fn blocking_transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
+        // needed in v3+ to avoid overrun causing the SPI RX state machine to get stuck...?
+        #[cfg(any(spi_v3, spi_v4, spi_v5))]
+        self.info.regs.cr1().modify(|w| w.set_spe(false));
+        self.info.regs.cr1().modify(|w| w.set_spe(true));
+        flush_rx_fifo(self.info.regs);
+        self.set_word_size(W::CONFIG);
+        let len = read.len().max(write.len());
+        for i in 0..len {
+            let wb = write.get(i).copied().unwrap_or_default();
+            let rb = transfer_word(self.info.regs, wb)?;
+            if let Some(r) = read.get_mut(i) {
+                *r = rb;
+            }
+        }
+        Ok(())
     }
 }
 
 impl<'d> SpiSlave<'d, Blocking> {
-    /// Create a new SPI slave driver
+    /// Create a new blocking SPI slave driver.
     pub fn new_blocking<T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -292,7 +339,7 @@ impl<'d> SpiSlave<'d, Blocking> {
         )
     }
 
-    /// Create a new SPI slave driver with hardware managed chip select
+    /// Create a new blocking SPI slave driver, with hardware managed chip select.
     pub fn new_blocking_hardware_cs<Cs, T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -322,10 +369,63 @@ impl<'d> SpiSlave<'d, Blocking> {
             config,
         )
     }
+
+    /// Create a new blocking SPI slave driver, in RX-only mode (only MOSI pin, no MISO).
+    pub fn new_blocking_rxonly<T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(peri, sck, mosi);
+
+        sck.set_as_af(sck.af_num(), AfType::input(Pull::None));
+        mosi.set_as_af(mosi.af_num(), AfType::input(Pull::None));
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            None,
+            None, 
+            None,
+            None,
+            config
+        )
+    }
+
+    /// Create a new blocking SPI slave driver, in RX-only mode (only MOSI pin, no MISO), with hardware managed chip select.
+    pub fn new_blocking_rxonly_hardware_cs<Cs, T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T>> + 'd,
+        cs: impl Peripheral<P = Cs> + 'd,
+        config: Config,
+    ) -> Self
+    where
+        Cs: CsPin<T>,
+    {
+        into_ref!(peri, sck, mosi, cs);
+
+        sck.set_as_af(sck.af_num(), AfType::input(Pull::None));
+        mosi.set_as_af(mosi.af_num(), AfType::input(Pull::None));
+        cs.set_as_af(cs.af_num(), AfType::input(Pull::None));
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            None,
+            Some(cs.map_into()),
+            None,
+            None,
+            config,
+        )
+    }
 }
 
 impl<'d> SpiSlave<'d, Async> {
-    /// Create a new SPI slave driver
+    /// Create a new SPI slave driver.
     pub fn new<T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -352,7 +452,8 @@ impl<'d> SpiSlave<'d, Async> {
             config,
         )
     }
-
+    
+    // create a new SPI slave driver, in RX-only mode (only MOSI pin, no MISO).
     pub fn new_rxonly<T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -377,6 +478,7 @@ impl<'d> SpiSlave<'d, Async> {
         )
     }
 
+    /// Create a new SPI slave driver, with hardware managed chip select.
     pub fn new_hardware_cs<Cs, T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -409,6 +511,7 @@ impl<'d> SpiSlave<'d, Async> {
         )
     }
 
+    /// Create a new SPI slave driver, in RX-only mode (only MOSI pin, no MISO), with hardware managed chip select.
     pub fn new_rxonly_hardware_cs<Cs, T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
@@ -549,10 +652,19 @@ impl<'d> SpiSlave<'d, Async> {
         Ok(())
     }
 
+    /// Bidirectional transfer, using DMA.
+    ///
+    /// This transfers both buffers at the same time, so it is NOT equivalent to `write` followed by `read`.
+    ///
+    /// The transfer runs for `max(read.len(), write.len())` bytes. If `read` is shorter extra bytes are ignored.
+    /// If `write` is shorter it is padded with zero bytes.
     pub async fn transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
         self.transfer_inner(read, write).await
     }
 
+    /// In-place bidirectional transfer, using DMA.
+    ///
+    /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
     pub async fn transfer_in_place<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
         self.transfer_inner(data, data).await
     }
@@ -575,20 +687,4 @@ impl<'d, M: PeriMode> SetConfig for SpiSlave<'d, M> {
     fn set_config(&mut self, _config: &Self::Config) -> Result<(), ()> {
         unimplemented!()
     }
-}
-
-fn transfer_word<W: Word>(regs: Regs, tx_word: W) -> nb::Result<W, Error> {
-    spin_until_tx_ready(regs, true)?;
-
-    unsafe {
-        ptr::write_volatile(regs.tx_ptr(), tx_word);
-
-        #[cfg(any(spi_v3, spi_v4, spi_v5))]
-        regs.cr1().modify(|reg| reg.set_cstart(true));
-    }
-
-    spin_until_rx_ready(regs)?;
-
-    let rx_word = unsafe { ptr::read_volatile(regs.rx_ptr()) };
-    Ok(rx_word)
 }
