@@ -14,27 +14,16 @@ impl<'d, T: PeriMode, W> SpiSlaveRingBufferedRx<'d, T, W>
 where
     W: Word,
 {
-    /// 启动连续接收模式（在 dma_ringbuffered 中已启动 DMA 循环传输）
-    /// 该方法从 DMA 环形缓冲区中读取数据到用户提供的 buf 中，
-    /// 返回读取的元素数量。如果可读数据不足则返回 Error::Overrun。
-    pub fn read_next(&mut self, buf: &mut [W]) -> Result<usize, Error> {
-        match self.rx_ring_buffer.read(buf) {
-            Ok((read_count, _)) => Ok(read_count),
-            Err(_) => {
-                // 如果发生数据溢出，则先清空缓冲区，返回错误
-                self.rx_ring_buffer.clear();
-                Err(Error::Overrun)
-            }
-        }
-    }
-
     /// 异步等待读取 exact 个元素
-    pub async fn read_exact(&mut self, buf: &mut [W]) -> Result<(), Error> {
-        self.rx_ring_buffer.read_exact(buf).await.map_err(|_| Error::Overrun)?;
+    pub async fn read(&mut self, buf: &mut [W]) -> Result<(), Error> {
+        self.rx_ring_buffer.read_exact(buf).await.map_err(|e| match e {
+            crate::dma::ringbuffer::Error::Overrun => Error::Overrun,
+            crate::dma::ringbuffer::Error::DmaUnsynced => Error::Framing,
+        })?;
 
-        // 可选：检查 SPI 状态寄存器中的错误标志
-        let sr = self._inner.info.regs.sr().read();
-        check_error_flags(sr, true)?;
+        // // 可选：检查 SPI 状态寄存器中的错误标志
+        // let sr = self._inner.info.regs.sr().read();
+        // check_error_flags(sr, true)?;
 
         Ok(())
     }
