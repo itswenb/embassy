@@ -42,14 +42,7 @@ where
 
 impl<'d, M: PeriMode> SpiSlave<'d, M> {
     /// Into SPI RingBuffered Rx
-    pub fn into_ringbuffered_rx<T: Instance, Tx, Rx, W: Word>(
-        mut self,
-        rxdma_buffer: &'d mut [W],
-    ) -> SpiSlaveRingBufferedRx<'d, M, W>
-    where
-        Tx: TxDma<T>,
-        Rx: RxDma<T>,
-    {
+    pub fn into_ringbuffered_rx<W: Word>(mut self, rxdma_buffer: &'d mut [W]) -> SpiSlaveRingBufferedRx<'d, M, W> {
         self.set_word_size(W::CONFIG);
         // 禁用 SPI 仅用于初始化阶段，之后保持使能状态
         self.info.regs.cr1().modify(|w| w.set_spe(false));
