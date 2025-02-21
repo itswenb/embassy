@@ -72,8 +72,8 @@ pub struct SpiSlave<'d, M: PeriMode> {
     mosi: Option<PeripheralRef<'d, AnyPin>>,
     miso: Option<PeripheralRef<'d, AnyPin>>,
     cs: Option<PeripheralRef<'d, AnyPin>>,
-    tx_dma: Option<ChannelAndRequest<'d>>,
-    rx_dma: Option<ChannelAndRequest<'d>>,
+    pub(crate) tx_dma: Option<ChannelAndRequest<'d>>,
+    pub(crate) rx_dma: Option<ChannelAndRequest<'d>>,
     _phantom: PhantomData<M>,
     current_word_size: word_impl::Config,
 }
@@ -187,7 +187,7 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
         }
     }
 
-    fn set_word_size(&mut self, word_size: word_impl::Config) {
+    pub(crate) fn set_word_size(&mut self, word_size: word_impl::Config) {
         if self.current_word_size == word_size {
             return;
         }

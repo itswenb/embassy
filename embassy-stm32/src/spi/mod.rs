@@ -20,6 +20,9 @@ use crate::Peripheral;
 mod slave;
 pub use slave::{Config as ConfigSlave, SpiSlave};
 
+mod ringbuffer;
+pub use ringbuffer::SpiSlaveRingBufferedRx;
+
 /// SPI error.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
