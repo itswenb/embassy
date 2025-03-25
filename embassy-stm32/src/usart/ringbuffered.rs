@@ -14,6 +14,8 @@ use super::{
 use crate::dma::ReadableRingBuffer;
 use crate::gpio::{AnyPin, SealedPin as _};
 use crate::mode::Async;
+#[cfg(any(usart_v3, usart_v4))]
+use crate::pac::usart::regs;
 use crate::time::Hertz;
 use crate::usart::{Regs, Sr};
 
@@ -97,6 +99,8 @@ impl<'d> RingBufferedUartRx<'d> {
             // enable idle line interrupt
             w.set_idleie(true);
         });
+        // Clear all potential error interrupt flags
+        clear_interrupt_flags(r, sr(r).read());
         r.cr3().modify(|w| {
             // enable Error Interrupt: (Frame error, Noise error, Overrun error)
             w.set_eie(true);
@@ -140,14 +144,15 @@ impl<'d> RingBufferedUartRx<'d> {
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         let r = self.info.regs;
 
-        // Start DMA and Uart if it was not already started,
-        // otherwise check for errors in status register.
+        // (Re-)start DMA and Uart if it is not running (has not been started yet or has failed),
+        // and check for errors in status register. Error flags are cleared in `start_uart()` so
+        // they need to be read first without returning yet.
         let sr = clear_idle_flag(r);
+        let res = check_for_errors(sr);
         if !r.cr3().read().dmar() {
             self.start_uart();
-        } else {
-            check_for_errors(sr)?;
         }
+        res?;
 
         loop {
             match self.ring_buf.read(buf) {
@@ -254,7 +259,12 @@ fn clear_idle_flag(r: Regs) -> Sr {
 
     // This read also clears the error and idle interrupt flags on v1.
     unsafe { rdr(r).read_volatile() };
-    clear_interrupt_flags(r, sr);
+    #[cfg(any(usart_v3, usart_v4))]
+    {
+        let mut clear_idle = regs::Icr(0);
+        clear_idle.set_idle(true);
+        r.icr().write_value(clear_idle);
+    }
 
     r.cr1().modify(|w| w.set_idleie(true));
 

@@ -190,7 +190,7 @@ pub enum SyncInput {
     /// Syncs with the other A/B sub-block within the SAI unit
     Internal,
     /// Syncs with a sub-block in the other SAI unit
-    #[cfg(any(sai_v4_2pdm, sai_v4_4pdm))]
+    #[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
     External(SyncInputInstance),
 }
 
@@ -199,14 +199,14 @@ impl SyncInput {
         match self {
             SyncInput::None => vals::Syncen::ASYNCHRONOUS,
             SyncInput::Internal => vals::Syncen::INTERNAL,
-            #[cfg(any(sai_v4_2pdm, sai_v4_4pdm))]
+            #[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
             SyncInput::External(_) => vals::Syncen::EXTERNAL,
         }
     }
 }
 
 /// SAI instance to sync from.
-#[cfg(any(sai_v4_2pdm, sai_v4_4pdm))]
+#[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
 #[derive(Copy, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub enum SyncInputInstance {
@@ -704,12 +704,12 @@ fn update_synchronous_config(config: &mut Config) {
     config.mode = Mode::Slave;
     config.sync_output = false;
 
-    #[cfg(any(sai_v1, sai_v2, sai_v3_2pdm, sai_v3_4pdm))]
+    #[cfg(any(sai_v1, sai_v2))]
     {
         config.sync_input = SyncInput::Internal;
     }
 
-    #[cfg(any(sai_v4_2pdm, sai_v4_4pdm))]
+    #[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
     {
         //this must either be Internal or External
         //The asynchronous sub-block on the same SAI needs to enable sync_output
@@ -870,7 +870,7 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
 
         ch.cr2().modify(|w| w.set_fflush(true));
 
-        #[cfg(any(sai_v4_2pdm, sai_v4_4pdm))]
+        #[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
         {
             if let SyncInput::External(i) = config.sync_input {
                 T::REGS.gcr().modify(|w| {
@@ -936,7 +936,7 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
                 w.set_nbslot(config.slot_count.0 as u8 - 1);
                 w.set_slotsz(config.slot_size.slotsz());
                 w.set_fboff(config.first_bit_offset.0 as u8);
-                w.set_sloten(vals::Sloten(config.slot_enable as u16));
+                w.set_sloten(vals::Sloten::from_bits(config.slot_enable as u16));
             });
 
             ch.cr1().modify(|w| w.set_saien(true));

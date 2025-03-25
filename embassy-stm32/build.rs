@@ -296,6 +296,8 @@ fn main() {
                 "Bank1"
             } else if region.name.starts_with("BANK_2") {
                 "Bank2"
+            } else if region.name == "OTP" {
+                "Otp"
             } else {
                 continue;
             }
@@ -532,7 +534,11 @@ fn main() {
                 match crate::pac::RCC.#fieldset_name().read().#field_name() {
                     #match_arms
                     #[allow(unreachable_patterns)]
-                    _ => unreachable!(),
+                    _ => panic!(
+                        "attempted to use peripheral '{}' but its clock mux is not set to a valid \
+                         clock. Change 'config.rcc.mux' to another clock.",
+                        #peripheral
+                    )
                 }
             }
         }
@@ -872,6 +878,7 @@ fn main() {
         (("ltdc", "B7"), quote!(crate::ltdc::B7Pin)),
         (("usb", "DP"), quote!(crate::usb::DpPin)),
         (("usb", "DM"), quote!(crate::usb::DmPin)),
+        (("usb", "SOF"), quote!(crate::usb::SofPin)),
         (("otg", "DP"), quote!(crate::usb::DpPin)),
         (("otg", "DM"), quote!(crate::usb::DmPin)),
         (("otg", "ULPI_CK"), quote!(crate::usb::UlpiClkPin)),
@@ -1383,7 +1390,7 @@ fn main() {
     for e in rcc_registers.ir.enums {
         fn is_rcc_name(e: &str) -> bool {
             match e {
-                "Pllp" | "Pllq" | "Pllr" | "Pllm" | "Plln" => true,
+                "Pllp" | "Pllq" | "Pllr" | "Pllm" | "Plln" | "Prediv1" | "Prediv2" => true,
                 "Timpre" | "Pllrclkpre" => false,
                 e if e.ends_with("pre") || e.ends_with("pres") || e.ends_with("div") || e.ends_with("mul") => true,
                 _ => false,
@@ -1534,7 +1541,7 @@ fn main() {
         // This should avoid unintended side-effects as much as possible.
         #[cfg(feature = "_split-pins-enabled")]
         for split_feature in &split_features {
-            if split_feature.pin_name_without_c == pin_name {
+            if split_feature.pin_name_without_c == pin.name {
                 pins_table.push(vec![
                     split_feature.pin_name_with_c.to_string(),
                     p.name.to_string(),

@@ -18,7 +18,10 @@ use crate::interrupt::typelevel::{Binding, Handler, Interrupt};
 use crate::relocate::RelocatedProgram;
 use crate::{pac, peripherals, RegExt};
 
-pub mod instr;
+mod instr;
+
+#[doc(inline)]
+pub use pio as program;
 
 /// Wakers for interrupts and FIFOs.
 pub struct Wakers([AtomicWaker; 12]);
@@ -359,6 +362,7 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineRx<'d, PIO, SM> {
         &'a mut self,
         ch: PeripheralRef<'a, C>,
         data: &'a mut [W],
+        bswap: bool,
     ) -> Transfer<'a, C> {
         let pio_no = PIO::PIO_NO;
         let p = ch.regs();
@@ -376,6 +380,7 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineRx<'d, PIO, SM> {
             w.set_chain_to(ch.number());
             w.set_incr_read(false);
             w.set_incr_write(true);
+            w.set_bswap(bswap);
             w.set_en(true);
         });
         compiler_fence(Ordering::SeqCst);
@@ -444,7 +449,12 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineTx<'d, PIO, SM> {
     }
 
     /// Prepare a DMA transfer to TX FIFO.
-    pub fn dma_push<'a, C: Channel, W: Word>(&'a mut self, ch: PeripheralRef<'a, C>, data: &'a [W]) -> Transfer<'a, C> {
+    pub fn dma_push<'a, C: Channel, W: Word>(
+        &'a mut self,
+        ch: PeripheralRef<'a, C>,
+        data: &'a [W],
+        bswap: bool,
+    ) -> Transfer<'a, C> {
         let pio_no = PIO::PIO_NO;
         let p = ch.regs();
         p.read_addr().write_value(data.as_ptr() as u32);
@@ -461,6 +471,7 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineTx<'d, PIO, SM> {
             w.set_chain_to(ch.number());
             w.set_incr_read(true);
             w.set_incr_write(false);
+            w.set_bswap(bswap);
             w.set_en(true);
         });
         compiler_fence(Ordering::SeqCst);
@@ -651,7 +662,7 @@ impl<'d, PIO: Instance> Config<'d, PIO> {
     /// of the program. The state machine is not started.
     ///
     /// `side_set` sets the range of pins affected by side-sets. The range must be consecutive.
-    /// Side-set pins must configured as outputs using [`StateMachine::set_pin_dirs`] to be
+    /// Sideset pins must configured as outputs using [`StateMachine::set_pin_dirs`] to be
     /// effective.
     pub fn use_program(&mut self, prog: &LoadedProgram<'d, PIO>, side_set: &[&Pin<'d, PIO>]) {
         assert!((prog.side_set.bits() - prog.side_set.optional() as u8) as usize == side_set.len());
@@ -812,8 +823,53 @@ impl<'d, PIO: Instance + 'd, const SM: usize> StateMachine<'d, PIO, SM> {
         }
 
         if let Some(origin) = config.origin {
-            unsafe { instr::exec_jmp(self, origin) }
+            unsafe { self.exec_jmp(origin) }
         }
+    }
+
+    /// Read current instruction address for this state machine
+    pub fn get_addr(&self) -> u8 {
+        let addr = Self::this_sm().addr();
+        addr.read().addr()
+    }
+
+    /// Read TX FIFO threshold for this state machine.
+    pub fn get_tx_threshold(&self) -> u8 {
+        let shiftctrl = Self::this_sm().shiftctrl();
+        shiftctrl.read().pull_thresh()
+    }
+
+    /// Set/change the TX FIFO threshold for this state machine.
+    pub fn set_tx_threshold(&mut self, threshold: u8) {
+        assert!(threshold <= 31);
+        let shiftctrl = Self::this_sm().shiftctrl();
+        shiftctrl.modify(|w| {
+            w.set_pull_thresh(threshold);
+        });
+    }
+
+    /// Read TX FIFO threshold for this state machine.
+    pub fn get_rx_threshold(&self) -> u8 {
+        Self::this_sm().shiftctrl().read().push_thresh()
+    }
+
+    /// Set/change the RX FIFO threshold for this state machine.
+    pub fn set_rx_threshold(&mut self, threshold: u8) {
+        assert!(threshold <= 31);
+        let shiftctrl = Self::this_sm().shiftctrl();
+        shiftctrl.modify(|w| {
+            w.set_push_thresh(threshold);
+        });
+    }
+
+    /// Set/change both TX and RX FIFO thresholds for this state machine.
+    pub fn set_thresholds(&mut self, threshold: u8) {
+        assert!(threshold <= 31);
+        let shiftctrl = Self::this_sm().shiftctrl();
+        shiftctrl.modify(|w| {
+            w.set_push_thresh(threshold);
+            w.set_pull_thresh(threshold);
+        });
     }
 
     /// Set the clock divider for this state machine.

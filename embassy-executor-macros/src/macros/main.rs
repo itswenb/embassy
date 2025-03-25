@@ -155,17 +155,24 @@ pub fn run(args: TokenStream, item: TokenStream, arch: &Arch) -> TokenStream {
         ),
     };
 
+    let mut main_attrs = TokenStream::new();
+    for attr in f.attrs {
+        main_attrs.extend(quote!(#attr));
+    }
+
     if !errors.is_empty() {
         main_body = quote! {loop{}};
     }
 
     let result = quote! {
         #[::embassy_executor::task()]
+        #[allow(clippy::future_not_send)]
         async fn __embassy_main(#fargs) #out {
             #f_body
         }
 
         #entry
+        #main_attrs
         fn main() -> #main_ret {
             #main_body
         }

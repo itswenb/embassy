@@ -16,7 +16,7 @@ pub struct PioI2sOutProgram<'a, PIO: Instance> {
 impl<'a, PIO: Instance> PioI2sOutProgram<'a, PIO> {
     /// Load the program into the given pio
     pub fn new(common: &mut Common<'a, PIO>) -> Self {
-        let prg = pio_proc::pio_asm!(
+        let prg = pio::pio_asm!(
             ".side_set 2",
             "    set x, 14          side 0b01", // side 0bWB - W = Word Clock, B = Bit Clock
             "left_data:",
@@ -90,6 +90,6 @@ impl<'a, P: Instance, const S: usize> PioI2sOut<'a, P, S> {
 
     /// Return an in-prograss dma transfer future. Awaiting it will guarentee a complete transfer.
     pub fn write<'b>(&'b mut self, buff: &'b [u32]) -> Transfer<'b, AnyChannel> {
-        self.sm.tx().dma_push(self.dma.reborrow(), buff)
+        self.sm.tx().dma_push(self.dma.reborrow(), buff, false)
     }
 }

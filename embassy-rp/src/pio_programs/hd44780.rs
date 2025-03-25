@@ -15,7 +15,7 @@ pub struct PioHD44780CommandWordProgram<'a, PIO: Instance> {
 impl<'a, PIO: Instance> PioHD44780CommandWordProgram<'a, PIO> {
     /// Load the program into the given pio
     pub fn new(common: &mut Common<'a, PIO>) -> Self {
-        let prg = pio_proc::pio_asm!(
+        let prg = pio::pio_asm!(
             r#"
                 .side_set 1 opt
                 .origin 20
@@ -46,7 +46,7 @@ impl<'a, PIO: Instance> PioHD44780CommandSequenceProgram<'a, PIO> {
     /// Load the program into the given pio
     pub fn new(common: &mut Common<'a, PIO>) -> Self {
         // many side sets are only there to free up a delay bit!
-        let prg = pio_proc::pio_asm!(
+        let prg = pio::pio_asm!(
             r#"
                 .origin 27
                 .side_set 1
@@ -173,7 +173,7 @@ impl<'l, P: Instance, const S: usize> PioHD44780<'l, P, S> {
         sm.set_enable(true);
 
         // display on and cursor on and blinking, reset display
-        sm.tx().dma_push(dma.reborrow(), &[0x81u8, 0x0f, 1]).await;
+        sm.tx().dma_push(dma.reborrow(), &[0x81u8, 0x0f, 1], false).await;
 
         Self {
             dma: dma.map_into(),
@@ -198,6 +198,6 @@ impl<'l, P: Instance, const S: usize> PioHD44780<'l, P, S> {
         // set cursor to 1:15
         self.buf[38..].copy_from_slice(&[0x80, 0xcf]);
 
-        self.sm.tx().dma_push(self.dma.reborrow(), &self.buf).await;
+        self.sm.tx().dma_push(self.dma.reborrow(), &self.buf, false).await;
     }
 }
