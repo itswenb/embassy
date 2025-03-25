@@ -153,18 +153,18 @@ impl<'d, M: PeriMode> SpiSlave<'d, M> {
                 if miso.is_none() {
                     w.set_comm(vals::Comm::RECEIVER);
                 } else {
-                    w.set_comm(vals::Comm::FULLDUPLEX);
+                    w.set_comm(vals::Comm::FULL_DUPLEX);
                 }
                 w.set_ssom(vals::Ssom::ASSERTED);
                 w.set_midi(0);
                 w.set_mssi(0);
                 w.set_afcntr(true);
-                w.set_ssiop(vals::Ssiop::ACTIVEHIGH);
+                w.set_ssiop(vals::Ssiop::ACTIVE_HIGH);
             });
             regs.cfg1().modify(|w| {
                 w.set_crcen(false);
                 w.set_dsize(<u8 as SealedWord>::CONFIG);
-                w.set_fthlv(vals::Fthlv::ONEFRAME);
+                w.set_fthlv(vals::Fthlv::ONE_FRAME);
             });
             regs.cr2().modify(|w| {
                 w.set_tsize(0);
