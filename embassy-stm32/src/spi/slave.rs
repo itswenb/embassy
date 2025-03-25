@@ -453,7 +453,7 @@ impl<'d> SpiSlave<'d, Async> {
         )
     }
 
-    // create a new SPI slave driver, in RX-only mode (only MOSI pin, no MISO).
+    /// create a new SPI slave driver, in RX-only mode (only MOSI pin, no MISO).
     pub fn new_rxonly<T: Instance>(
         peri: impl Peripheral<P = T> + 'd,
         sck: impl Peripheral<P = impl SckPin<T>> + 'd,
