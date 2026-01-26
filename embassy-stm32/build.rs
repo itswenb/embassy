@@ -16,6 +16,13 @@ use stm32_metapac::metadata::{
 #[path = "./build_common.rs"]
 mod common;
 
+fn is_banned_gpio_port(p: &stm32_metapac::metadata::Peripheral) -> bool { 
+    if p.registers.as_ref().map(|r| r.kind) != Some("gpio") {
+        return false;
+    }
+    matches!(p.name, "GPIOJ" | "GPIOK")
+}
+
 /// Helper function to handle peripheral versions with underscores.
 /// For a version like "v1_foo_bar", this generates all prefix combinations:
 /// - "kind_v1"
@@ -966,7 +973,7 @@ fn main() {
         if kind == "gpio" {
             for p in METADATA.peripherals {
                 // set all GPIOs to analog mode except for PA13 and PA14 which are SWDIO and SWDCLK
-                if p.registers.is_some()
+                if p.registers.is_some() && !is_banned_gpio_port(p)
                     && p.registers.as_ref().unwrap().kind == "gpio"
                     && p.registers.as_ref().unwrap().version != "v1"
                 {
